@@ -1,0 +1,3 @@
+[submodule "Arduino-TMAG5170"]
+	path = Arduino-TMAG5170
+	url = https://github.com/light655/arduino-tmag5170.git
