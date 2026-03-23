@@ -11,6 +11,8 @@ import tkinter as tk
 from tkinter import ttk
 import time
 import threading
+import sys
+import os
 from collections import deque
 from tmag5170 import (
     TMAG5170, CONV_AVG_32x,
@@ -222,8 +224,18 @@ class TMAG5170App:
         self.root.destroy()
 
 
+def _resource_path(filename):
+    base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, filename)
+
+
 def main():
     root = tk.Tk()
+    try:
+        icon = tk.PhotoImage(file=_resource_path("Magnet-Icon.png"))
+        root.iconphoto(True, icon)
+    except Exception:
+        pass
     app = TMAG5170App(root)
     root.protocol("WM_DELETE_WINDOW", app.on_close)
     root.mainloop()
