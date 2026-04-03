@@ -11,11 +11,18 @@ import tkinter as tk
 from tkinter import ttk
 import time
 import threading
+import queue
 import base64
 from collections import deque
 from tmag5170 import (
-    TMAG5170, CONV_AVG_32x,
-    X_RANGE_300mT, Y_RANGE_300mT, Z_RANGE_300mT,
+    TMAG5170,
+    CONV_AVG_1x, CONV_AVG_2x, CONV_AVG_4x, CONV_AVG_8x, CONV_AVG_16x, CONV_AVG_32x,
+    X_RANGE_50mT, X_RANGE_25mT, X_RANGE_100mT,
+    Y_RANGE_50mT, Y_RANGE_25mT, Y_RANGE_100mT,
+    Z_RANGE_50mT, Z_RANGE_25mT, Z_RANGE_100mT,
+    X_RANGE_150mT, X_RANGE_75mT, X_RANGE_300mT,
+    Y_RANGE_150mT, Y_RANGE_75mT, Y_RANGE_300mT,
+    Z_RANGE_150mT, Z_RANGE_75mT, Z_RANGE_300mT,
     VERSION_A1, VERSION_A2, VERSION_ERROR,
 )
 
@@ -210,7 +217,15 @@ LABEL_FG = "#95a5a6"
 
 
 class SensorThread(threading.Thread):
-    """Background thread that continuously reads the sensor."""
+    """Background thread that continuously reads the sensor.
+
+    Commands sent via set_* methods are queued and applied between samples.
+    """
+
+    # Default range codes for A2 (300 mT full scale)
+    _DEFAULT_AVG = CONV_AVG_32x
+    _DEFAULT_RANGE_A1 = (X_RANGE_100mT, Y_RANGE_100mT, Z_RANGE_100mT)
+    _DEFAULT_RANGE_A2 = (X_RANGE_300mT, Y_RANGE_300mT, Z_RANGE_300mT)
 
     def __init__(self, bus=0, device=0, speed_hz=1000000):
         super().__init__(daemon=True)
@@ -220,10 +235,43 @@ class SensorThread(threading.Thread):
         self.bx = 0.0
         self.by = 0.0
         self.bz = 0.0
+        self.temperature = None   # None until first read
+        self.version = VERSION_ERROR
         self.connected = False
         self.error_msg = ""
         self.running = True
+        self.sample_interval_s = SAMPLE_INTERVAL_S
         self.lock = threading.Lock()
+        self._cmd_queue = queue.Queue()
+        self._temp_interval = 1.0   # seconds between temperature reads
+        self._last_temp_time = 0.0
+
+    # ---- thread-safe setters called from the GUI ----
+
+    def set_conversion_average(self, avg_const):
+        self._cmd_queue.put(("avg", avg_const))
+
+    def set_range(self, x_range, y_range, z_range):
+        self._cmd_queue.put(("range", x_range, y_range, z_range))
+
+    def set_sample_interval(self, interval_s):
+        self._cmd_queue.put(("interval", interval_s))
+
+    # ---- internal helpers ----
+
+    def _apply_commands(self, sensor):
+        while not self._cmd_queue.empty():
+            try:
+                cmd = self._cmd_queue.get_nowait()
+            except queue.Empty:
+                break
+            if cmd[0] == "avg":
+                sensor.set_conversion_average(cmd[1])
+            elif cmd[0] == "range":
+                sensor.set_magnetic_range(cmd[1], cmd[2], cmd[3])
+            elif cmd[0] == "interval":
+                with self.lock:
+                    self.sample_interval_s = cmd[1]
 
     def run(self):
         sensor = None
@@ -236,20 +284,36 @@ class SensorThread(threading.Thread):
                     self.error_msg = "Sensor init failed - check wiring"
                 return
 
-            sensor.set_conversion_average(CONV_AVG_32x)
+            default_range = (self._DEFAULT_RANGE_A1 if version == VERSION_A1
+                             else self._DEFAULT_RANGE_A2)
+            sensor.set_conversion_average(self._DEFAULT_AVG)
             sensor.enable_magnetic_channel(x=True, y=True, z=True)
-            sensor.set_magnetic_range(X_RANGE_300mT, Y_RANGE_300mT, Z_RANGE_300mT)
+            sensor.set_magnetic_range(*default_range)
+            sensor.enable_temperature_channel(True)
 
             with self.lock:
                 self.connected = True
+                self.version = version
                 version_names = {VERSION_A1: "A1", VERSION_A2: "A2"}
                 self.error_msg = f"Connected (TMAG5170-{version_names.get(version, '?')})"
 
             while self.running:
+                self._apply_commands(sensor)
                 bx, by, bz = sensor.read_xyz()
+
+                now = time.monotonic()
+                temp = None
+                if now - self._last_temp_time >= self._temp_interval:
+                    temp = sensor.read_temperature()
+                    self._last_temp_time = now
+
                 with self.lock:
                     self.bx, self.by, self.bz = bx, by, bz
-                time.sleep(SAMPLE_INTERVAL_S)
+                    if temp is not None:
+                        self.temperature = temp
+                    interval = self.sample_interval_s
+
+                time.sleep(interval)
 
         except Exception as e:
             with self.lock:
@@ -264,29 +328,71 @@ class SensorThread(threading.Thread):
 
     def get_values(self):
         with self.lock:
-            return self.bx, self.by, self.bz, self.connected, self.error_msg
+            return (self.bx, self.by, self.bz,
+                    self.temperature, self.version,
+                    self.connected, self.error_msg)
 
     def stop(self):
         self.running = False
 
 
 class TMAG5170App:
+    # Conversion averaging options: label -> driver constant
+    _AVG_OPTIONS = {
+        "1x":  CONV_AVG_1x,
+        "2x":  CONV_AVG_2x,
+        "4x":  CONV_AVG_4x,
+        "8x":  CONV_AVG_8x,
+        "16x": CONV_AVG_16x,
+        "32x": CONV_AVG_32x,
+    }
+
+    # Range options per version: label -> (x_range, y_range, z_range)
+    _RANGE_OPTIONS_A1 = {
+        "25 mT":  (X_RANGE_25mT,  Y_RANGE_25mT,  Z_RANGE_25mT),
+        "50 mT":  (X_RANGE_50mT,  Y_RANGE_50mT,  Z_RANGE_50mT),
+        "100 mT": (X_RANGE_100mT, Y_RANGE_100mT, Z_RANGE_100mT),
+    }
+    _RANGE_OPTIONS_A2 = {
+        "75 mT":  (X_RANGE_75mT,  Y_RANGE_75mT,  Z_RANGE_75mT),
+        "150 mT": (X_RANGE_150mT, Y_RANGE_150mT, Z_RANGE_150mT),
+        "300 mT": (X_RANGE_300mT, Y_RANGE_300mT, Z_RANGE_300mT),
+    }
+
+    # Refresh rate options: label -> sample interval in seconds
+    _RATE_OPTIONS = {
+        "1 Hz":   1.0,
+        "2 Hz":   0.5,
+        "5 Hz":   0.2,
+        "10 Hz":  0.1,
+        "20 Hz":  0.05,
+        "50 Hz":  0.02,
+        "100 Hz": 0.01,
+    }
+
     def __init__(self, root):
         self.root = root
         self.root.title("TMAG5170 Magnetic Field Monitor")
         self.root.configure(bg=WINDOW_BG)
-        self.root.geometry("800x520")
-        self.root.minsize(600, 400)
+        self.root.geometry("1000x520")
+        self.root.minsize(700, 400)
 
         self.history_x = deque([0.0] * HISTORY_LEN, maxlen=HISTORY_LEN)
         self.history_y = deque([0.0] * HISTORY_LEN, maxlen=HISTORY_LEN)
         self.history_z = deque([0.0] * HISTORY_LEN, maxlen=HISTORY_LEN)
-        self.max_range = 50.0  # auto-scales
+        self.max_range = 50.0
+
+        # Track detected version so range options can be populated after connect
+        self._version_populated = False
 
         self._build_ui()
         self.sensor_thread = SensorThread()
         self.sensor_thread.start()
         self._update()
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
 
     def _build_ui(self):
         # Status bar
@@ -312,15 +418,106 @@ class TMAG5170App:
 
         val_frame.columnconfigure(5, weight=1)
 
-        # Canvas for the plot
-        self.canvas = tk.Canvas(self.root, bg=PLOT_BG, highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        # Main area: plot canvas + control panel side by side
+        main_frame = tk.Frame(self.root, bg=WINDOW_BG)
+        main_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        self.canvas = tk.Canvas(main_frame, bg=PLOT_BG, highlightthickness=0)
+        self.canvas.pack(side="left", fill="both", expand=True)
+
+        self._build_control_panel(main_frame)
+
+    def _build_control_panel(self, parent):
+        panel = tk.Frame(parent, bg=WINDOW_BG, width=180)
+        panel.pack(side="right", fill="y", padx=(8, 0))
+        panel.pack_propagate(False)
+
+        def section(text):
+            tk.Label(panel, text=text, bg=WINDOW_BG, fg=LABEL_FG,
+                     font=("Consolas", 9, "bold")).pack(anchor="w", pady=(10, 2))
+
+
+        # ---- Temperature ----
+        section("TEMPERATURE")
+        temp_row = tk.Frame(panel, bg=WINDOW_BG)
+        temp_row.pack(anchor="w")
+        tk.Label(temp_row, text="Die: ", bg=WINDOW_BG, fg=LABEL_FG,
+                 font=("Consolas", 9)).pack(side="left")
+        self.temp_label = tk.Label(temp_row, text="-- °C", bg=WINDOW_BG, fg=TEXT_FG,
+                                   font=("Consolas", 11, "bold"), width=9, anchor="e")
+        self.temp_label.pack(side="left")
+
+        # ---- Sensitivity (range) ----
+        section("SENSITIVITY")
+        self.range_var = tk.StringVar(value="300 mT")
+        self.range_combo = ttk.Combobox(panel, textvariable=self.range_var,
+                                        state="disabled", width=10,
+                                        font=("Consolas", 9))
+        self.range_combo.pack(anchor="w")
+        self.range_combo.bind("<<ComboboxSelected>>", self._on_range_changed)
+
+        # ---- Conversion averaging ----
+        section("CONV AVERAGING")
+        self.avg_var = tk.StringVar(value="32x")
+        avg_combo = ttk.Combobox(panel, textvariable=self.avg_var,
+                                 values=list(self._AVG_OPTIONS.keys()),
+                                 state="readonly", width=10,
+                                 font=("Consolas", 9))
+        avg_combo.pack(anchor="w")
+        avg_combo.bind("<<ComboboxSelected>>", self._on_avg_changed)
+
+        # ---- Refresh rate ----
+        section("REFRESH RATE")
+        self.rate_var = tk.StringVar(value="20 Hz")
+        rate_combo = ttk.Combobox(panel, textvariable=self.rate_var,
+                                  values=list(self._RATE_OPTIONS.keys()),
+                                  state="readonly", width=10,
+                                  font=("Consolas", 9))
+        rate_combo.pack(anchor="w")
+        rate_combo.bind("<<ComboboxSelected>>", self._on_rate_changed)
+
+    # ------------------------------------------------------------------
+    # Control callbacks
+    # ------------------------------------------------------------------
+
+    def _on_range_changed(self, _=None):
+        version = self.sensor_thread.version
+        options = (self._RANGE_OPTIONS_A1 if version == VERSION_A1
+                   else self._RANGE_OPTIONS_A2)
+        key = self.range_var.get()
+        if key in options:
+            self.sensor_thread.set_range(*options[key])
+
+    def _on_avg_changed(self, _=None):
+        key = self.avg_var.get()
+        if key in self._AVG_OPTIONS:
+            self.sensor_thread.set_conversion_average(self._AVG_OPTIONS[key])
+
+    def _on_rate_changed(self, _=None):
+        key = self.rate_var.get()
+        if key in self._RATE_OPTIONS:
+            self.sensor_thread.set_sample_interval(self._RATE_OPTIONS[key])
+
+    # ------------------------------------------------------------------
+    # Update loop
+    # ------------------------------------------------------------------
 
     def _update(self):
-        bx, by, bz, connected, msg = self.sensor_thread.get_values()
+        bx, by, bz, temperature, version, connected, msg = self.sensor_thread.get_values()
         self.status_var.set(msg if msg else "Connecting...")
 
         if connected:
+            # Populate range dropdown once version is known
+            if not self._version_populated:
+                options = (self._RANGE_OPTIONS_A1 if version == VERSION_A1
+                           else self._RANGE_OPTIONS_A2)
+                keys = list(options.keys())
+                self.range_combo.config(values=keys, state="readonly")
+                # Select the highest range as default
+                default = keys[-1]
+                self.range_var.set(default)
+                self._version_populated = True
+
             self.history_x.append(bx)
             self.history_y.append(by)
             self.history_z.append(bz)
@@ -329,9 +526,16 @@ class TMAG5170App:
             self.value_labels["y"].config(text=f"{by:>8.3f} mT")
             self.value_labels["z"].config(text=f"{bz:>8.3f} mT")
 
+            if temperature is not None:
+                self.temp_label.config(text=f"{temperature:>5.1f} °C")
+
             self._draw_plot()
 
         self.root.after(UPDATE_INTERVAL_MS, self._update)
+
+    # ------------------------------------------------------------------
+    # Plot rendering
+    # ------------------------------------------------------------------
 
     def _draw_plot(self):
         self.canvas.delete("all")
@@ -344,10 +548,8 @@ class TMAG5170App:
         pw = w - margin_l - margin_r
         ph = h - margin_t - margin_b
 
-        # Auto-scale Y axis
         all_vals = list(self.history_x) + list(self.history_y) + list(self.history_z)
         peak = max(abs(v) for v in all_vals) if all_vals else 1.0
-        # Smooth scale changes
         target = max(peak * 1.2, 1.0)
         if target > self.max_range:
             self.max_range = target
@@ -362,7 +564,6 @@ class TMAG5170App:
         def idx_to_x(idx):
             return margin_l + (idx / (HISTORY_LEN - 1)) * pw
 
-        # Grid lines
         num_gridlines = 5
         for i in range(num_gridlines + 1):
             frac = i / num_gridlines
@@ -372,15 +573,12 @@ class TMAG5170App:
             self.canvas.create_text(margin_l - 5, y, text=f"{val:+.1f}", anchor="e",
                                     fill=LABEL_FG, font=("Consolas", 8))
 
-        # Zero line
         y0 = val_to_y(0)
         self.canvas.create_line(margin_l, y0, w - margin_r, y0, fill="#666666")
 
-        # Axis label
         self.canvas.create_text(10, h / 2, text="mT", anchor="w",
                                 fill=LABEL_FG, font=("Consolas", 9))
 
-        # Plot traces
         for data, color in [(self.history_x, COLORS["x"]),
                              (self.history_y, COLORS["y"]),
                              (self.history_z, COLORS["z"])]:
@@ -391,7 +589,6 @@ class TMAG5170App:
             if len(points) >= 4:
                 self.canvas.create_line(points, fill=color, width=2, smooth=True)
 
-        # Legend
         lx = w - margin_r - 100
         for i, (axis, color) in enumerate(COLORS.items()):
             ly = margin_t + 5 + i * 16
