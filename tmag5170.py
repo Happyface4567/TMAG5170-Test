@@ -84,6 +84,15 @@ VERSION_A1 = 0
 VERSION_A2 = 1
 VERSION_ERROR = 3
 
+# DEVICE_CONFIG temperature bits
+T_CH_EN_MASK = 0x000C   # bits 3:2
+T_CH_EN_ENABLED = 0x0008  # enable temp channel, T_RATE = same as other sensors
+
+# Temperature conversion constants (TMAG5170 datasheet)
+_TEMP_TSENS_T0 = 25.0    # °C reference temperature
+_TEMP_TADC_T0 = 17508    # ADC code at 25 °C (typical)
+_TEMP_TADC_RES = 60.1    # LSB / °C (typical)
+
 # Range coefficient lookup: (version, range_code) -> mT full-scale
 _RANGE_COEFF = {
     # X axis (bits 1:0)
@@ -243,6 +252,21 @@ class TMAG5170:
         else:
             self.registers[ALERT_CONFIG] &= ~RSLT_ALRT_Asserted
         self.write_register(ALERT_CONFIG)
+
+    def enable_temperature_channel(self, enable=True):
+        """Enable the on-chip temperature sensor (T_RATE = same as other channels)."""
+        if enable:
+            self.registers[DEVICE_CONFIG] = (
+                (self.registers[DEVICE_CONFIG] & ~T_CH_EN_MASK) | T_CH_EN_ENABLED
+            )
+        else:
+            self.registers[DEVICE_CONFIG] &= ~T_CH_EN_MASK
+        self.write_register(DEVICE_CONFIG)
+
+    def read_temperature(self):
+        """Read die temperature in °C using the datasheet conversion formula."""
+        raw = self.read_register(TEMP_RESULT)
+        return _TEMP_TSENS_T0 + (raw - _TEMP_TADC_T0) / _TEMP_TADC_RES
 
     def _read_axis_raw(self, reg, start_conversion=False):
         val = self.read_register(reg, start_conversion)
