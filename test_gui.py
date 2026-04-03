@@ -478,6 +478,12 @@ class TMAG5170App:
         rate_combo.pack(anchor="w")
         rate_combo.bind("<<ComboboxSelected>>", self._on_rate_changed)
 
+        # ---- Vector display ----
+        section("FIELD VECTOR")
+        self.vec_canvas = tk.Canvas(panel, bg=PLOT_BG, highlightthickness=0,
+                                    width=160, height=150)
+        self.vec_canvas.pack(anchor="w", pady=(2, 6))
+
     # ------------------------------------------------------------------
     # Control callbacks
     # ------------------------------------------------------------------
@@ -533,6 +539,7 @@ class TMAG5170App:
                 self.temp_label.config(text=f"{temperature:>5.1f} °C")
 
             self._draw_plot()
+            self._draw_vector()
 
         self.root.after(UPDATE_INTERVAL_MS, self._update)
 
@@ -599,112 +606,89 @@ class TMAG5170App:
             self.canvas.create_text(lx + 25, ly + 6, text=f"B{axis.upper()}", anchor="w",
                                     fill=color, font=("Consolas", 9, "bold"))
 
-        self._draw_vector(w, h, margin_b)
 
-    def _draw_vector(self, w, h, margin_b):
-        """Draw an isometric 3-D vector indicator in the bottom-right of the canvas."""
-        SIZE = min(w * 0.22, h * 0.38, 120)  # widget-relative, capped at 120 px
-        PAD = 8
-        cx = w - PAD - SIZE / 2
-        cy = h - margin_b - PAD - SIZE / 2
+    def _draw_vector(self):
+        """Draw an isometric 3-D vector indicator on the side-panel canvas."""
+        vc = self.vec_canvas
+        vc.delete("all")
+        w = vc.winfo_width()
+        h = vc.winfo_height()
+        if w < 10 or h < 10:
+            return
 
-        # Isometric projection vectors for the three axes.
-        # Standard isometric: X goes right-down, Y goes left-down, Z goes up.
-        #   iso_x = ( cos30,  sin30) =  (√3/2,  0.5)
-        #   iso_y = (-cos30,  sin30) = (-√3/2,  0.5)
-        #   iso_z = (      0,    -1)
+        # Reserve bottom strip for magnitude label
+        LABEL_H = 14
+        SIZE = min(w, h - LABEL_H)
+        cx = w / 2
+        cy = (h - LABEL_H) / 2
+
+        # Standard isometric projection:
+        #   X  → right-down  ( cos30,  sin30)
+        #   Y  → left-down   (-cos30,  sin30)
+        #   Z  → straight up (0, -1)
         s = SIZE / 2
         c30 = math.sqrt(3) / 2
         s30 = 0.5
 
         def iso(x3, y3, z3):
-            """3-D point → 2-D canvas coords (origin at cx, cy)."""
-            px = (x3 * c30 + y3 * (-c30)) * s
-            py = (x3 * s30 + y3 *   s30  - z3) * s
+            px = (x3 * c30 - y3 * c30) * s
+            py = (x3 * s30 + y3 * s30 - z3) * s
             return cx + px, cy + py
 
-        axis_len = 0.55   # fraction of s for the reference axis arms
-        ax = {
-            "x": iso(axis_len, 0, 0),
-            "y": iso(0, axis_len, 0),
-            "z": iso(0, 0, axis_len),
-        }
         origin = iso(0, 0, 0)
+        axis_len = 0.55
 
-        # Faint bounding box edges to give depth cues
-        corners = [
-            (iso(0, 0, 0), iso(1, 0, 0)),
-            (iso(0, 0, 0), iso(0, 1, 0)),
-            (iso(0, 0, 0), iso(0, 0, 1)),
-            (iso(1, 0, 0), iso(1, 1, 0)),
-            (iso(0, 1, 0), iso(1, 1, 0)),
-            (iso(1, 0, 0), iso(1, 0, 1)),
-            (iso(0, 0, 1), iso(1, 0, 1)),
-            (iso(0, 1, 0), iso(0, 1, 1)),
-            (iso(0, 0, 1), iso(0, 1, 1)),
-            (iso(1, 1, 0), iso(1, 1, 1)),
-            (iso(1, 0, 1), iso(1, 1, 1)),
-            (iso(0, 1, 1), iso(1, 1, 1)),
-        ]
-        for p1, p2 in corners:
-            self.canvas.create_line(p1[0], p1[1], p2[0], p2[1],
-                                    fill="#2a2a2a", width=1)
+        # Unit-cube wireframe
+        for p1, p2 in [
+            (iso(0,0,0), iso(1,0,0)), (iso(0,0,0), iso(0,1,0)), (iso(0,0,0), iso(0,0,1)),
+            (iso(1,0,0), iso(1,1,0)), (iso(0,1,0), iso(1,1,0)),
+            (iso(1,0,0), iso(1,0,1)), (iso(0,0,1), iso(1,0,1)),
+            (iso(0,1,0), iso(0,1,1)), (iso(0,0,1), iso(0,1,1)),
+            (iso(1,1,0), iso(1,1,1)), (iso(1,0,1), iso(1,1,1)), (iso(0,1,1), iso(1,1,1)),
+        ]:
+            vc.create_line(p1[0], p1[1], p2[0], p2[1], fill="#2a2a2a", width=1)
 
-        # Draw coordinate axes from origin
-        for axis, tip in ax.items():
+        # Coordinate axes + labels
+        for axis, tip3 in [("x", (axis_len,0,0)), ("y", (0,axis_len,0)), ("z", (0,0,axis_len))]:
+            tip = iso(*tip3)
             color = COLORS[axis]
-            self.canvas.create_line(origin[0], origin[1], tip[0], tip[1],
-                                    fill=color, width=2)
-            # Axis label
-            dx = tip[0] - origin[0]
-            dy = tip[1] - origin[1]
-            norm = math.hypot(dx, dy) or 1
-            lx_off = tip[0] + dx / norm * 8
-            ly_off = tip[1] + dy / norm * 8
-            self.canvas.create_text(lx_off, ly_off, text=axis.upper(),
-                                    fill=color, font=("Consolas", 7, "bold"))
+            vc.create_line(origin[0], origin[1], tip[0], tip[1], fill=color, width=2)
+            dx, dy = tip[0] - origin[0], tip[1] - origin[1]
+            n = math.hypot(dx, dy) or 1
+            vc.create_text(tip[0] + dx/n*8, tip[1] + dy/n*8,
+                           text=axis.upper(), fill=color, font=("Consolas", 7, "bold"))
 
-        # Normalise B vector to fit in the unit cube, scaled to axis_len
+        # Scale B vector so the longest component equals axis_len
         bx, by, bz = self._current_b
-        mag = math.sqrt(bx ** 2 + by ** 2 + bz ** 2) or 1e-9
-        scale = axis_len / max(abs(bx), abs(by), abs(bz), mag)
+        mag = math.sqrt(bx**2 + by**2 + bz**2)
+        peak = max(abs(bx), abs(by), abs(bz), 1e-9)
+        scale = axis_len / peak
         vx, vy, vz = bx * scale, by * scale, bz * scale
-
         tip_v = iso(vx, vy, vz)
 
-        # Dashed projection lines onto each axis plane face
-        proj_xy = iso(vx, vy, 0)
-        proj_xz = iso(vx, 0, vz)
-        proj_yz = iso(0, vy, vz)
-        for proj in (proj_xy, proj_xz, proj_yz):
-            self.canvas.create_line(tip_v[0], tip_v[1], proj[0], proj[1],
-                                    fill="#555555", dash=(2, 3), width=1)
+        # Dashed projections onto the three axis planes
+        for proj in (iso(vx, vy, 0), iso(vx, 0, vz), iso(0, vy, vz)):
+            vc.create_line(tip_v[0], tip_v[1], proj[0], proj[1],
+                           fill="#555555", dash=(2, 3), width=1)
 
-        # Vector arrow
-        self.canvas.create_line(origin[0], origin[1], tip_v[0], tip_v[1],
-                                fill="#ffffff", width=2)
+        # Arrow shaft
+        vc.create_line(origin[0], origin[1], tip_v[0], tip_v[1], fill="#ffffff", width=2)
 
-        # Arrowhead (small filled triangle at tip)
-        dx = tip_v[0] - origin[0]
-        dy = tip_v[1] - origin[1]
-        norm = math.hypot(dx, dy) or 1
-        ux, uy = dx / norm, dy / norm           # unit vector along arrow
-        px, py = -uy, ux                        # perpendicular
-        ah = 7                                  # arrowhead length
-        aw = 3                                  # arrowhead half-width
-        head = [
+        # Arrowhead
+        dx, dy = tip_v[0] - origin[0], tip_v[1] - origin[1]
+        n = math.hypot(dx, dy) or 1
+        ux, uy = dx/n, dy/n
+        px, py = -uy, ux
+        ah, aw = 7, 3
+        vc.create_polygon([
             tip_v[0], tip_v[1],
-            tip_v[0] - ux * ah + px * aw,
-            tip_v[1] - uy * ah + py * aw,
-            tip_v[0] - ux * ah - px * aw,
-            tip_v[1] - uy * ah - py * aw,
-        ]
-        self.canvas.create_polygon(head, fill="#ffffff", outline="")
+            tip_v[0] - ux*ah + px*aw, tip_v[1] - uy*ah + py*aw,
+            tip_v[0] - ux*ah - px*aw, tip_v[1] - uy*ah - py*aw,
+        ], fill="#ffffff", outline="")
 
         # Magnitude label
-        self.canvas.create_text(cx, cy + SIZE / 2 + 4,
-                                text=f"|B| {mag:.1f} mT",
-                                fill=LABEL_FG, font=("Consolas", 8), anchor="n")
+        vc.create_text(cx, h - LABEL_H + 2, text=f"|B| {mag:.1f} mT",
+                       fill=LABEL_FG, font=("Consolas", 8), anchor="n")
 
     def on_close(self):
         self.sensor_thread.stop()
