@@ -221,6 +221,7 @@ class SensorThread(threading.Thread):
         self.lock = threading.Lock()
 
     def run(self):
+        sensor = None
         try:
             sensor = TMAG5170(self.bus, self.device, self.speed_hz)
             sensor.open()
@@ -250,10 +251,11 @@ class SensorThread(threading.Thread):
                 self.error_msg = str(e) or f"Error: {type(e).__name__}"
                 self.connected = False
         finally:
-            try:
-                sensor.close()
-            except Exception:
-                pass
+            if sensor is not None:
+                try:
+                    sensor.close()
+                except Exception:
+                    pass
 
     def get_values(self):
         with self.lock:
