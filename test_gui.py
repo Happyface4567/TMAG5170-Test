@@ -410,8 +410,8 @@ class TMAG5170App:
         status.pack(fill="x", padx=10, pady=(8, 0))
 
         # Value display frame
-        val_frame = tk.Frame(self.root, bg=WINDOW_BG)
-        val_frame.pack(fill="x", padx=10, pady=8)
+        val_frame = tk.Frame(left_frame, bg=WINDOW_BG)
+        val_frame.pack(fill="x", pady=8)
 
         self.value_labels = {}
         for i, (axis, color) in enumerate(COLORS.items()):
@@ -427,13 +427,19 @@ class TMAG5170App:
         val_frame.columnconfigure(5, weight=1)
 
         # Main area: plot canvas + control panel side by side
-        main_frame = tk.Frame(self.root, bg=WINDOW_BG)
-        main_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        content_frame = tk.Frame(self.root, bg=WINDOW_BG)
+        content_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
-        self.canvas = tk.Canvas(main_frame, bg=PLOT_BG, highlightthickness=0)
-        self.canvas.pack(side="left", fill="both", expand=True)
+        # Left side (everything except control panel)
+        left_frame = tk.Frame(content_frame, bg=WINDOW_BG)
+        left_frame.pack(side="left", fill="both", expand=True)
 
-        self._build_control_panel(main_frame)
+        # Move canvas into left_frame
+        self.canvas = tk.Canvas(left_frame, bg=PLOT_BG, highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True)
+
+        # Right panel now attached to full height
+        self._build_control_panel(content_frame)
 
     def _build_control_panel(self, parent):
         panel = tk.Frame(parent, bg=WINDOW_BG, width=180)
@@ -542,11 +548,16 @@ class TMAG5170App:
         if self._calibrating:
             self._cal_samples.append((bx, by, bz))
 
-            if len(self._cal_samples) >= self._cal_target_samples:
-                # Compute average offset
-                avg_x = sum(s[0] for s in self._cal_samples) / len(self._cal_samples)
-                avg_y = sum(s[1] for s in self._cal_samples) / len(self._cal_samples)
-                avg_z = sum(s[2] for s in self._cal_samples) / len(self._cal_samples)
+            n = len(self._cal_samples)
+            total = self._cal_target_samples
+
+            # Live progress feedback
+            self.status_var.set(f"Calibrating... {n}/{total} (keep sensor still)")
+
+            if n >= total:
+                avg_x = sum(s[0] for s in self._cal_samples) / n
+                avg_y = sum(s[1] for s in self._cal_samples) / n
+                avg_z = sum(s[2] for s in self._cal_samples) / n
 
                 self._offset = (avg_x, avg_y, avg_z)
                 self._calibrating = False
