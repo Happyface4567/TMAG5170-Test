@@ -392,6 +392,12 @@ class TMAG5170App:
         self.sensor_thread.start()
         self._update()
 
+        # Calibration state
+        self._calibrating = False
+        self._cal_samples = []
+        self._cal_target_samples = 100
+        self._offset = (0.0, 0.0, 0.0)
+
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
@@ -438,6 +444,11 @@ class TMAG5170App:
             tk.Label(panel, text=text, bg=WINDOW_BG, fg=LABEL_FG,
                      font=("Consolas", 9, "bold")).pack(anchor="w", pady=(10, 2))
 
+        # ---- Calibrate ----
+        section("CALIBRATE")
+        calibrate_row = tk.Button(panel, text="Calibrate", bg=WINDOW_BG, fg=TEXT_FG,
+                             font=("Consolas", 9), relief="raised", bd=1, command=self._calibrate_zero_field)
+        calibrate_row.pack(anchor="w")
 
         # ---- Temperature ----
         section("TEMPERATURE")
@@ -507,11 +518,40 @@ class TMAG5170App:
             self.sensor_thread.set_sample_interval(self._RATE_OPTIONS[key])
 
     # ------------------------------------------------------------------
+    # Calibration logic
+    # ------------------------------------------------------------------
+
+    def _calibrate_zero_field(self):
+    """Start collecting samples to compute zero-field offset."""
+    if self._calibrating:
+        return  # already running
+
+    self._calibrating = True
+    self._cal_samples = []
+    self.status_var.set("Calibrating... keep sensor still")
+
+
+    # ------------------------------------------------------------------
     # Update loop
     # ------------------------------------------------------------------
 
     def _update(self):
         bx, by, bz, temperature, version, connected, msg = self.sensor_thread.get_values()
+
+        # Apply calibration logic
+        if self._calibrating:
+            self._cal_samples.append((bx, by, bz))
+
+            if len(self._cal_samples) >= self._cal_target_samples:
+                # Compute average offset
+                avg_x = sum(s[0] for s in self._cal_samples) / len(self._cal_samples)
+                avg_y = sum(s[1] for s in self._cal_samples) / len(self._cal_samples)
+                avg_z = sum(s[2] for s in self._cal_samples) / len(self._cal_samples)
+
+                self._offset = (avg_x, avg_y, avg_z)
+                self._calibrating = False
+                self.status_var.set("Calibration complete")
+
         self.status_var.set(msg if msg else "Connecting...")
 
         if connected:
@@ -526,14 +566,19 @@ class TMAG5170App:
                 self.range_var.set(default)
                 self._version_populated = True
 
-            self.history_x.append(bx)
-            self.history_y.append(by)
-            self.history_z.append(bz)
-            self._current_b = (bx, by, bz)
+            # Subtract offset
+            bx_corr = bx - self._offset[0]
+            by_corr = by - self._offset[1]
+            bz_corr = bz - self._offset[2]
 
-            self.value_labels["x"].config(text=f"{bx:>8.3f} mT")
-            self.value_labels["y"].config(text=f"{by:>8.3f} mT")
-            self.value_labels["z"].config(text=f"{bz:>8.3f} mT")
+            self.history_x.append(bx_corr)
+            self.history_y.append(by_corr)
+            self.history_z.append(bz_corr)
+            self._current_b = (bx_corr, by_corr, bz_corr)
+
+            self.value_labels["x"].config(text=f"{bx_corr:>8.3f} mT")
+            self.value_labels["y"].config(text=f"{by_corr:>8.3f} mT")
+            self.value_labels["z"].config(text=f"{bz_corr:>8.3f} mT")
 
             if temperature is not None:
                 self.temp_label.config(text=f"{temperature:>5.1f} °C")
