@@ -403,42 +403,44 @@ class TMAG5170App:
     # ------------------------------------------------------------------
 
     def _build_ui(self):
-        # Status bar
+        # ---- Status bar (top) ----
         self.status_var = tk.StringVar(value="Connecting...")
-        status = tk.Label(self.root, textvariable=self.status_var, bg=WINDOW_BG,
-                          fg=LABEL_FG, font=("Consolas", 10), anchor="w")
+        status = tk.Label(self.root, textvariable=self.status_var,
+                        bg=WINDOW_BG, fg=LABEL_FG,
+                        font=("Consolas", 10), anchor="w")
         status.pack(fill="x", padx=10, pady=(8, 0))
 
-        # Value display frame
+        # ---- Main horizontal container ----
+        content_frame = tk.Frame(self.root, bg=WINDOW_BG)
+        content_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        # ---- LEFT SIDE (create FIRST) ----
+        left_frame = tk.Frame(content_frame, bg=WINDOW_BG)
+        left_frame.pack(side="left", fill="both", expand=True)
+
+        # ---- Value display (NOW it's safe to use left_frame) ----
         val_frame = tk.Frame(left_frame, bg=WINDOW_BG)
         val_frame.pack(fill="x", pady=8)
 
         self.value_labels = {}
         for i, (axis, color) in enumerate(COLORS.items()):
-            lbl = tk.Label(val_frame, text=f"B{axis.upper()}:", bg=WINDOW_BG,
-                           fg=color, font=("Consolas", 14, "bold"))
+            lbl = tk.Label(val_frame, text=f"B{axis.upper()}:",
+                        bg=WINDOW_BG, fg=color,
+                        font=("Consolas", 14, "bold"))
             lbl.grid(row=0, column=i * 2, padx=(0, 4))
 
-            val = tk.Label(val_frame, text="  0.000 mT", bg=WINDOW_BG,
-                           fg=TEXT_FG, font=("Consolas", 14), width=12, anchor="e")
+            val = tk.Label(val_frame, text="  0.000 mT",
+                        bg=WINDOW_BG, fg=TEXT_FG,
+                        font=("Consolas", 14),
+                        width=12, anchor="e")
             val.grid(row=0, column=i * 2 + 1, padx=(0, 20))
             self.value_labels[axis] = val
 
-        val_frame.columnconfigure(5, weight=1)
-
-        # Main area: plot canvas + control panel side by side
-        content_frame = tk.Frame(self.root, bg=WINDOW_BG)
-        content_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-
-        # Left side (everything except control panel)
-        left_frame = tk.Frame(content_frame, bg=WINDOW_BG)
-        left_frame.pack(side="left", fill="both", expand=True)
-
-        # Move canvas into left_frame
+        # ---- Plot canvas ----
         self.canvas = tk.Canvas(left_frame, bg=PLOT_BG, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
 
-        # Right panel now attached to full height
+        # ---- RIGHT PANEL ----
         self._build_control_panel(content_frame)
 
     def _build_control_panel(self, parent):
