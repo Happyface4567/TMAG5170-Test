@@ -454,9 +454,9 @@ class TMAG5170App:
 
         # ---- Calibrate ----
         section("CALIBRATE")
-        calibrate_button = tk.Button(panel, text="Calibrate", bg=WINDOW_BG, fg=TEXT_FG,
+        self.calibrate_button = tk.Button(panel, text="Calibrate", bg=WINDOW_BG, fg=TEXT_FG,
                              font=("Consolas", 9), relief="raised", bd=1, command=self._calibrate_zero_field)
-        calibrate_button.pack(anchor="w")
+        self.calibrate_button.pack(anchor="w")
 
         # ---- Temperature ----
         section("TEMPERATURE")
