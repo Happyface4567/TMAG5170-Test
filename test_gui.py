@@ -13,6 +13,11 @@ import time
 import threading
 import base64
 from collections import deque
+from tmag5170 import (
+    TMAG5170, CONV_AVG_32x,
+    X_RANGE_300mT, Y_RANGE_300mT, Z_RANGE_300mT,
+    VERSION_A1, VERSION_A2, VERSION_ERROR,
+)
 
 _ICON_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAYAAAD0eNT6AAAABHNCSVQICAgIfAhkiAAAAAlwSFlz"
