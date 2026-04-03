@@ -454,9 +454,9 @@ class TMAG5170App:
 
         # ---- Calibrate ----
         section("CALIBRATE")
-        calibrate_row = tk.Button(panel, text="Calibrate", bg=WINDOW_BG, fg=TEXT_FG,
+        calibrate_button = tk.Button(panel, text="Calibrate", bg=WINDOW_BG, fg=TEXT_FG,
                              font=("Consolas", 9), relief="raised", bd=1, command=self._calibrate_zero_field)
-        calibrate_row.pack(anchor="w")
+        calibrate_button.pack(anchor="w")
 
         # ---- Temperature ----
         section("TEMPERATURE")
@@ -555,6 +555,7 @@ class TMAG5170App:
 
             # Live progress feedback
             self.status_var.set(f"Calibrating... {n}/{total} (keep sensor still)")
+            self.calibrate_button.config(text=f"Calibrating... {n}/{total}",bg="#ff0000",fg="#000000")
 
             if n >= total:
                 avg_x = sum(s[0] for s in self._cal_samples) / n
@@ -564,6 +565,7 @@ class TMAG5170App:
                 self._offset = (avg_x, avg_y, avg_z)
                 self._calibrating = False
                 self.status_var.set("Calibration complete")
+                self.calibrate_button.config(text="Calibrate",bg=WINDOW_BG,fg=TEXT_FG)
 
         self.status_var.set(msg if msg else "Connecting...")
 
