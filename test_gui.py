@@ -387,16 +387,16 @@ class TMAG5170App:
         # Track detected version so range options can be populated after connect
         self._version_populated = False
 
-        self._build_ui()
-        self.sensor_thread = SensorThread()
-        self.sensor_thread.start()
-        self._update()
-
         # Calibration state
         self._calibrating = False
         self._cal_samples = []
         self._cal_target_samples = 100
         self._offset = (0.0, 0.0, 0.0)
+
+        self._build_ui()
+        self.sensor_thread = SensorThread()
+        self.sensor_thread.start()
+        self._update()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -522,13 +522,13 @@ class TMAG5170App:
     # ------------------------------------------------------------------
 
     def _calibrate_zero_field(self):
-    """Start collecting samples to compute zero-field offset."""
-    if self._calibrating:
-        return  # already running
+        """Start collecting samples to compute zero-field offset."""
+        if self._calibrating:
+            return  # already running
 
-    self._calibrating = True
-    self._cal_samples = []
-    self.status_var.set("Calibrating... keep sensor still")
+        self._calibrating = True
+        self._cal_samples = []
+        self.status_var.set("Calibrating... keep sensor still")
 
 
     # ------------------------------------------------------------------
