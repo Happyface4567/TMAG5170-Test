@@ -12,6 +12,7 @@ from tkinter import ttk
 import time
 import threading
 import queue
+import math
 import base64
 from collections import deque
 from tmag5170 import (
@@ -381,6 +382,7 @@ class TMAG5170App:
         self.history_y = deque([0.0] * HISTORY_LEN, maxlen=HISTORY_LEN)
         self.history_z = deque([0.0] * HISTORY_LEN, maxlen=HISTORY_LEN)
         self.max_range = 50.0
+        self._current_b = (0.0, 0.0, 0.0)
 
         # Track detected version so range options can be populated after connect
         self._version_populated = False
@@ -521,6 +523,7 @@ class TMAG5170App:
             self.history_x.append(bx)
             self.history_y.append(by)
             self.history_z.append(bz)
+            self._current_b = (bx, by, bz)
 
             self.value_labels["x"].config(text=f"{bx:>8.3f} mT")
             self.value_labels["y"].config(text=f"{by:>8.3f} mT")
@@ -595,6 +598,113 @@ class TMAG5170App:
             self.canvas.create_line(lx, ly + 6, lx + 20, ly + 6, fill=color, width=2)
             self.canvas.create_text(lx + 25, ly + 6, text=f"B{axis.upper()}", anchor="w",
                                     fill=color, font=("Consolas", 9, "bold"))
+
+        self._draw_vector(w, h, margin_b)
+
+    def _draw_vector(self, w, h, margin_b):
+        """Draw an isometric 3-D vector indicator in the bottom-right of the canvas."""
+        SIZE = min(w * 0.22, h * 0.38, 120)  # widget-relative, capped at 120 px
+        PAD = 8
+        cx = w - PAD - SIZE / 2
+        cy = h - margin_b - PAD - SIZE / 2
+
+        # Isometric projection vectors for the three axes.
+        # Standard isometric: X goes right-down, Y goes left-down, Z goes up.
+        #   iso_x = ( cos30,  sin30) =  (√3/2,  0.5)
+        #   iso_y = (-cos30,  sin30) = (-√3/2,  0.5)
+        #   iso_z = (      0,    -1)
+        s = SIZE / 2
+        c30 = math.sqrt(3) / 2
+        s30 = 0.5
+
+        def iso(x3, y3, z3):
+            """3-D point → 2-D canvas coords (origin at cx, cy)."""
+            px = (x3 * c30 + y3 * (-c30)) * s
+            py = (x3 * s30 + y3 *   s30  - z3) * s
+            return cx + px, cy + py
+
+        axis_len = 0.55   # fraction of s for the reference axis arms
+        ax = {
+            "x": iso(axis_len, 0, 0),
+            "y": iso(0, axis_len, 0),
+            "z": iso(0, 0, axis_len),
+        }
+        origin = iso(0, 0, 0)
+
+        # Faint bounding box edges to give depth cues
+        corners = [
+            (iso(0, 0, 0), iso(1, 0, 0)),
+            (iso(0, 0, 0), iso(0, 1, 0)),
+            (iso(0, 0, 0), iso(0, 0, 1)),
+            (iso(1, 0, 0), iso(1, 1, 0)),
+            (iso(0, 1, 0), iso(1, 1, 0)),
+            (iso(1, 0, 0), iso(1, 0, 1)),
+            (iso(0, 0, 1), iso(1, 0, 1)),
+            (iso(0, 1, 0), iso(0, 1, 1)),
+            (iso(0, 0, 1), iso(0, 1, 1)),
+            (iso(1, 1, 0), iso(1, 1, 1)),
+            (iso(1, 0, 1), iso(1, 1, 1)),
+            (iso(0, 1, 1), iso(1, 1, 1)),
+        ]
+        for p1, p2 in corners:
+            self.canvas.create_line(p1[0], p1[1], p2[0], p2[1],
+                                    fill="#2a2a2a", width=1)
+
+        # Draw coordinate axes from origin
+        for axis, tip in ax.items():
+            color = COLORS[axis]
+            self.canvas.create_line(origin[0], origin[1], tip[0], tip[1],
+                                    fill=color, width=2)
+            # Axis label
+            dx = tip[0] - origin[0]
+            dy = tip[1] - origin[1]
+            norm = math.hypot(dx, dy) or 1
+            lx_off = tip[0] + dx / norm * 8
+            ly_off = tip[1] + dy / norm * 8
+            self.canvas.create_text(lx_off, ly_off, text=axis.upper(),
+                                    fill=color, font=("Consolas", 7, "bold"))
+
+        # Normalise B vector to fit in the unit cube, scaled to axis_len
+        bx, by, bz = self._current_b
+        mag = math.sqrt(bx ** 2 + by ** 2 + bz ** 2) or 1e-9
+        scale = axis_len / max(abs(bx), abs(by), abs(bz), mag)
+        vx, vy, vz = bx * scale, by * scale, bz * scale
+
+        tip_v = iso(vx, vy, vz)
+
+        # Dashed projection lines onto each axis plane face
+        proj_xy = iso(vx, vy, 0)
+        proj_xz = iso(vx, 0, vz)
+        proj_yz = iso(0, vy, vz)
+        for proj in (proj_xy, proj_xz, proj_yz):
+            self.canvas.create_line(tip_v[0], tip_v[1], proj[0], proj[1],
+                                    fill="#555555", dash=(2, 3), width=1)
+
+        # Vector arrow
+        self.canvas.create_line(origin[0], origin[1], tip_v[0], tip_v[1],
+                                fill="#ffffff", width=2)
+
+        # Arrowhead (small filled triangle at tip)
+        dx = tip_v[0] - origin[0]
+        dy = tip_v[1] - origin[1]
+        norm = math.hypot(dx, dy) or 1
+        ux, uy = dx / norm, dy / norm           # unit vector along arrow
+        px, py = -uy, ux                        # perpendicular
+        ah = 7                                  # arrowhead length
+        aw = 3                                  # arrowhead half-width
+        head = [
+            tip_v[0], tip_v[1],
+            tip_v[0] - ux * ah + px * aw,
+            tip_v[1] - uy * ah + py * aw,
+            tip_v[0] - ux * ah - px * aw,
+            tip_v[1] - uy * ah - py * aw,
+        ]
+        self.canvas.create_polygon(head, fill="#ffffff", outline="")
+
+        # Magnitude label
+        self.canvas.create_text(cx, cy + SIZE / 2 + 4,
+                                text=f"|B| {mag:.1f} mT",
+                                fill=LABEL_FG, font=("Consolas", 8), anchor="n")
 
     def on_close(self):
         self.sensor_thread.stop()
